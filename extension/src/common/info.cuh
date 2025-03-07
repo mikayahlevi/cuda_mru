@@ -87,7 +87,7 @@ inline mru_scan_info get_scan_info(const uint state_width, const uint sequence_l
     const uint state_sequence_size = state_matrix_size * sequence_length;
 
     const uint threads_per_block = tiled_state_size * matmuls_per_block;
-    assert(threads_per_block < 1024);
+    assert(threads_per_block <= 1024);
 
     return {
         .total_scan_stages = total_scan_stages,
