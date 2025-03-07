@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 template <typename scalar_t, uint tile_width>
 __device__ void matmul_matrices(

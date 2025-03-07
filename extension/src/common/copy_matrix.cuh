@@ -1,10 +1,8 @@
 #pragma once
 
-#ifdef __HIP_PLATFORM_AMD__
-#include <hip/hip_runtime.h>
-#else
+#include <cuda.h>
 #include <cuda_runtime.h>
-#endif
+#include <cuda/std/array>
 
 
 
@@ -37,7 +35,7 @@ __device__ inline void copy_matrix(const scalar_t* const source_matrices, scalar
 
 
 template <typename scalar_t, uint n_copies>
-__device__ inline void copy_matrices(const std::array<const scalar_t* const, n_copies> source_matrices, const std::array<scalar_t* const, n_copies> target_matrices, const uint matrix_size, const uint worker_idx, const uint total_workers) {
+__device__ inline void copy_matrices(const cuda::std::array<const scalar_t* const, n_copies> source_matrices, const cuda::std::array<scalar_t* const, n_copies> target_matrices, const uint matrix_size, const uint worker_idx, const uint total_workers) {
     typedef typename vector_type_info<scalar_t>::type vector_t;
     constexpr uint vector_type_size = vector_type_info<scalar_t>::elems_per_type;
     
@@ -81,7 +79,7 @@ __device__ inline void copy_matrix_transposed(const scalar_t* const source_matri
 
 
 template <typename scalar_t, uint n_copies>
-__device__ inline void copy_matrices_transposed(std::array<const scalar_t* const, n_copies> source_matrices, const std::array<scalar_t* const, n_copies> target_matrices, const uint matrix_width, const uint matrix_size, const uint worker_idx, const uint total_workers) {
+__device__ inline void copy_matrices_transposed(cuda::std::array<const scalar_t* const, n_copies> source_matrices, const cuda::std::array<scalar_t* const, n_copies> target_matrices, const uint matrix_width, const uint matrix_size, const uint worker_idx, const uint total_workers) {
     typedef typename vector_type_info<scalar_t>::type vector_t;
     constexpr uint vector_type_size = vector_type_info<scalar_t>::elems_per_type;
     

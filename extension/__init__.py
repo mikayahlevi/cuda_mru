@@ -14,6 +14,5 @@ mru_cuda_functions = torch.utils.cpp_extension.load(
         get_path('src/mru_cuda_functions.cpp'),
         get_path('src/mru_cuda_forward.cu'), get_path('src/mru_cuda_backward.cu')
     ]
-    #, extra_cflags=["-DGLOG_USE_GLOG_EXPORT"]
 )
 

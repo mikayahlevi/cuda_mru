@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 template <typename scalar_t, uint tile_width, bool accumulate>
 __device__ inline void write_tile(
