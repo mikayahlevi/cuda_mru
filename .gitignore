@@ -1,3 +1,2 @@
-__pycache__/
-extension/__pycache__/
-*hip*
+__pycache__
+hip_mru
