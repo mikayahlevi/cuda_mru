@@ -101,8 +101,10 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
         copy_matrix_transposed<scalar_t>(
             source_matrix_gmem_ptr,
             source_matrix_smem_ptr,
+            
             state_row_size,
             state_matrix_size,
+            
             intra_matmul_thread_idx + threads_per_matmul * intra_block_input_group_subidx,
             threads_per_source_matrix
         );

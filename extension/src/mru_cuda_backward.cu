@@ -7,7 +7,6 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cuda/std/array>
 
 
 template <typename scalar_t, uint tile_width, uint tile_size>
@@ -109,11 +108,13 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
         const uint matmuls_per_source_matrix = min(matmuls_per_block, scan_stage_offset);
         const uint threads_per_source_matrix = threads_per_matmul * matmuls_per_source_matrix;
 
-        copy_matrices_transposed<scalar_t, 2>(
-            cuda::std::array<const scalar_t* const, 2>{initial_states_source_matrix_gmem_ptr, states_grad_source_matrix_gmem_ptr},
-            cuda::std::array<scalar_t* const, 2>{initial_states_source_matrix_smem_ptr, states_grad_source_matrix_smem_ptr},
+        copy_two_matrices_transposed<scalar_t>(
+            initial_states_source_matrix_gmem_ptr, states_grad_source_matrix_gmem_ptr,
+            initial_states_source_matrix_smem_ptr, states_grad_source_matrix_smem_ptr,
+
             state_row_size,
             state_matrix_size,
+
             intra_matmul_thread_idx + threads_per_matmul * intra_block_input_group_subidx,
             threads_per_source_matrix
         );
@@ -122,10 +123,12 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
 
     // load the inplace matrices into smem
     __syncthreads();
-    copy_matrices<scalar_t, 2>(
-        cuda::std::array<const scalar_t* const, 2>{initial_states_inplace_matrix_gmem_ptr, states_grad_inplace_matrix_gmem_ptr},
-        cuda::std::array<scalar_t* const, 2>{initial_states_inplace_matrix_smem_ptr, states_grad_inplace_matrix_smem_ptr},
+    copy_two_matrices<scalar_t>(
+        initial_states_inplace_matrix_gmem_ptr, states_grad_inplace_matrix_gmem_ptr,
+        initial_states_inplace_matrix_smem_ptr, states_grad_inplace_matrix_smem_ptr,
+
         state_matrix_size,
+
         intra_matmul_thread_idx,
         threads_per_matmul
     );
@@ -175,10 +178,12 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
 
     // write results from smem back to gmem
     __syncthreads();
-    copy_matrices<scalar_t, 2>(
-        cuda::std::array<const scalar_t* const, 2>{initial_states_inplace_matrix_smem_ptr, states_grad_inplace_matrix_smem_ptr},
-        cuda::std::array<scalar_t* const, 2>{initial_states_inplace_matrix_gmem_ptr, states_grad_inplace_matrix_gmem_ptr},
+    copy_two_matrices<scalar_t>(
+        initial_states_inplace_matrix_smem_ptr, states_grad_inplace_matrix_smem_ptr,
+        initial_states_inplace_matrix_gmem_ptr, states_grad_inplace_matrix_gmem_ptr,
+
         state_matrix_size,
+
         intra_matmul_thread_idx,
         threads_per_matmul
     );
@@ -228,10 +233,12 @@ __global__ void mru_backward_combine_kernel(
 
     // load the matrices into smem
     __syncthreads();
-    copy_matrices<scalar_t, 2>(
-        cuda::std::array<const scalar_t* const, 2>{final_state_gmem_ptr, states_grad_gmem_ptr},
-        cuda::std::array<scalar_t* const, 2>{final_states_smem_ptr, states_grad_smem_ptr},
+    copy_two_matrices<scalar_t>(
+        final_state_gmem_ptr, states_grad_gmem_ptr,
+        final_states_smem_ptr, states_grad_smem_ptr,
+
         state_matrix_size,
+
         thread_idx,
         tiled_state_size
     );
@@ -255,7 +262,9 @@ __global__ void mru_backward_combine_kernel(
     copy_matrix<scalar_t>(
         states_grad_smem_ptr,
         states_grad_gmem_ptr,
+
         state_matrix_size,
+
         thread_idx,
         tiled_state_size
     );

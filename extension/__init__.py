@@ -13,6 +13,8 @@ mru_cuda_functions = torch.utils.cpp_extension.load(
     sources = [
         get_path('src/mru_cuda_functions.cpp'),
         get_path('src/mru_cuda_forward.cu'), get_path('src/mru_cuda_backward.cu')
-    ]
+    ],
+
+    extra_include_paths = [get_path('src/common/')]
 )
 
