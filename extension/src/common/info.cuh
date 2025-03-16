@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <iostream>
 
 
 struct mru_general_info {
@@ -81,6 +82,12 @@ inline mru_scan_info get_scan_info(const uint state_width, const uint sequence_l
 
     const uint tiled_state_width = ceil_div(state_width, tile_width);
     const uint tiled_state_size = tiled_state_width * tiled_state_width;
+
+    if (32 % tiled_state_width != 0 && tiled_state_width % 32 != 0) {
+        std::cout << 
+        "because tiled_state_width is neither a factor of or evenly divisible by 32, this kernel will be unable to utilize warp broadcasting and will run slower."
+        << '\n';
+    }
 
     const uint state_row_size = state_width;
     const uint state_matrix_size = state_row_size * state_row_size;
