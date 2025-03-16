@@ -120,11 +120,10 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
     scalar_t result_tile[tile_size] = {0.0};
     
     // coords of the top left corner of the tile
-    const uint tile_col = tile_width * (tile_idx % tiled_state_width);
     const uint tile_row = tile_width * (tile_idx / tiled_state_width);
+    const uint tile_col = tile_width * (tile_idx % tiled_state_width);
 
-    // move to the next row, then shift back tile_width to reset all the way to the left
-    const uint matrix_shift = state_row_size - tile_width;
+    const uint tile_depth_matmul_offset = state_row_size * (n_source_matrices * (tile_idx / 32) + intra_block_input_group_subidx);
 
     __syncthreads();
     matmul_matrices<scalar_t, tile_width>(
@@ -133,16 +132,15 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
         source_matrix_smem_ptr,
         inplace_matrix_smem_ptr,
 
-        tile_col + state_row_size * (tile_row / (4 * 32)),
-        tile_row + state_row_size * intra_block_input_group_subidx,
+        tile_col + tile_depth_matmul_offset,
+        tile_row + tile_depth_matmul_offset,
 
         state_matrix_size,
-        state_row_size,
-        matrix_shift
+        state_row_size
     );
 
     __syncthreads();
-    write_tile<scalar_t, tile_width, false>(result_tile, inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
+    write_tile<scalar_t, tile_width, false>(result_tile, inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size);
 
 
     // write results from smem back to gmem
