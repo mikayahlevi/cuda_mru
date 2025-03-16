@@ -100,11 +100,12 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
     #define intra_matmul_thread_idx tile_idx
 
 
+    const uint intra_block_input_group_subidx = matmul_input_group_subidx % matmuls_per_block;
+
 
     // load the source matrices into smem
     __syncthreads();
     {
-        const uint intra_block_input_group_subidx = matmul_input_group_subidx % matmuls_per_block;
         const uint matmuls_per_source_matrix = min(matmuls_per_block, scan_stage_offset);
         const uint threads_per_source_matrix = threads_per_matmul * matmuls_per_source_matrix;
 
@@ -133,48 +134,51 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
         threads_per_matmul
     );
 
+
+    scalar_t result_tile[tile_size] = {0.0};
     
-    // compute the matmuls
-    {
-        const uint new_intra_block_matmul_idx = threadIdx.x % matmuls_per_block;
-    
-        const uint new_source_matrix_smem_idx = (n_source_matrices - 1) - (new_intra_block_matmul_idx / scan_stage_offset);
-        const uint new_inplace_matrix_smem_idx = (n_inplace_matrices - 1) - new_intra_block_matmul_idx;
-    
-        const scalar_t* const new_initial_states_source_matrix_smem_ptr = &initial_states_source_matrices_smem_cache[state_matrix_size * new_source_matrix_smem_idx];
-        const scalar_t* const new_states_grad_source_matrix_smem_ptr = &states_grad_source_matrices_smem_cache[state_matrix_size * new_source_matrix_smem_idx];
-    
-        /* */ scalar_t* const new_initial_states_inplace_matrix_smem_ptr = &initial_states_inplace_matrices_smem_cache[state_matrix_size * new_inplace_matrix_smem_idx];
-        /* */ scalar_t* const new_states_grad_inplace_matrix_smem_ptr = &states_grad_inplace_matrices_smem_cache[state_matrix_size * new_inplace_matrix_smem_idx];
-    
-    
-        scalar_t result_tile[tile_size] = {0.0};
-    
-    
-        const uint tile_idx = threadIdx.x / matmuls_per_block;
-    
-        // coords of the top left corner of the tile
-        const uint tile_col = tile_width * (tile_idx % tiled_state_width);
-        const uint tile_row = tile_width * (tile_idx / tiled_state_width);
-    
-        // move to the next row, then shift back tile_width to reset all the way to the left
-        const uint matrix_shift = state_row_size - tile_width;
-    
-        __syncthreads();
-        matmul_matrices<scalar_t, tile_width>(result_tile, new_states_grad_source_matrix_smem_ptr, new_initial_states_inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
-    
-        __syncthreads();
-        write_tile<scalar_t, tile_width, true>(result_tile, new_states_grad_inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
-    
-        // reset result_tile to zeros
-        for (uint i = 0; i < tile_size; ++i) result_tile[i] = 0.0;
-    
-        __syncthreads();
-        matmul_matrices<scalar_t, tile_width>(result_tile, new_initial_states_source_matrix_smem_ptr, new_initial_states_inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
-    
-        __syncthreads();
-        write_tile<scalar_t, tile_width, false>(result_tile, new_initial_states_inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
-    }
+        
+    // coords of the top left corner of the tile
+    const uint tile_col = tile_width * (tile_idx % tiled_state_width);
+    const uint tile_row = tile_width * (tile_idx / tiled_state_width);
+
+    const uint tile_depth_matmul_offset = state_row_size * (n_source_matrices * (tile_idx / 32) + intra_block_input_group_subidx);
+
+    __syncthreads();
+    matmul_matrices<scalar_t, tile_width>(
+        result_tile,
+
+        states_grad_source_matrix_smem_ptr,
+        initial_states_inplace_matrix_smem_ptr,
+
+        tile_col + tile_depth_matmul_offset,
+        tile_row + tile_depth_matmul_offset,
+
+        state_matrix_size,
+        state_row_size
+    );
+
+    __syncthreads();
+    write_tile<scalar_t, tile_width, true>(result_tile, states_grad_inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size);
+
+    // reset result_tile to zeros
+    for (uint i = 0; i < tile_size; ++i) result_tile[i] = 0.0;
+
+    __syncthreads();
+    matmul_matrices<scalar_t, tile_width>(result_tile,
+        initial_states_source_matrix_smem_ptr,
+        initial_states_inplace_matrix_smem_ptr,
+
+        tile_col + tile_depth_matmul_offset,
+        tile_row + tile_depth_matmul_offset,
+
+        state_matrix_size,
+        state_row_size
+    );
+
+    __syncthreads();
+    write_tile<scalar_t, tile_width, false>(result_tile, initial_states_inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size);
+
 
     // write results from smem back to gmem
     __syncthreads();
@@ -248,15 +252,12 @@ __global__ void mru_backward_combine_kernel(
     // coords of the top left corner of the tile
     const uint tile_col = tile_width * (thread_idx % tiled_state_width);
     const uint tile_row = tile_width * (thread_idx / tiled_state_width);
-    
-    // move to the next row, then shift back tile_width to reset all the way to the left
-    const uint matrix_shift = state_row_size - tile_width;
 
     __syncthreads();
-    matmul_matrices<scalar_t, tile_width>(result_tile, final_states_smem_ptr, states_grad_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
+    matmul_matrices<scalar_t, tile_width>(result_tile, final_states_smem_ptr, states_grad_smem_ptr, tile_col, tile_row, state_matrix_size, state_row_size);
 
     __syncthreads(); 
-    write_tile<scalar_t, tile_width, false>(result_tile, states_grad_smem_ptr, tile_col, tile_row, state_row_size, matrix_shift);
+    write_tile<scalar_t, tile_width, false>(result_tile, states_grad_smem_ptr, tile_col, tile_row, state_row_size);
 
     __syncthreads();
     copy_matrix<scalar_t>(
