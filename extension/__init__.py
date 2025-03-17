@@ -15,6 +15,8 @@ mru_cuda_functions = torch.utils.cpp_extension.load(
         get_path('src/mru_cuda_forward.cu'), get_path('src/mru_cuda_backward.cu')
     ],
 
-    extra_include_paths = [get_path('src/common/')]
+    extra_include_paths = [get_path('src/common/')],
+    
+    extra_cuda_cflags = ['-DGTILE_WIDTH=4, -DMAX_MATMULS_PER_BLOCK=8']
 )
 

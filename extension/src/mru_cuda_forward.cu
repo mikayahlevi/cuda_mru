@@ -9,6 +9,15 @@
 #include <cuda_runtime.h>
 
 
+#ifndef TILE_WIDTH
+#error "TILE_WIDTH must be defined in the compiler flags"
+#endif
+
+#ifndef MAX_MATMULS_PER_BLOCK
+#error "MAX_MATMULS_PER_BLOCK must be defined in the compiler flags"
+#endif
+
+
 template <typename scalar_t, uint tile_width, uint tile_size>
 __global__ void mru_cuda_forward_scan_stage_kernel(
     scalar_t* states,
@@ -160,12 +169,8 @@ void mru_cuda_forward(
     const uint sequence_length,
     const uint state_width
 ) {
-    constexpr uint tile_width = 4;
-    constexpr uint tile_size = tile_width * tile_width;
-    constexpr uint max_matmuls_per_block = 8;
-
-    const mru_scan_info scan_info = get_scan_info<tile_width, max_matmuls_per_block>(state_width, sequence_length);
-    const mru_general_info general_info = get_general_info<tile_width>(state_width, sequence_length);
+    const mru_scan_info scan_info = get_scan_info<TILE_WIDTH, MAX_MATMULS_PER_BLOCK>(state_width, sequence_length);
+    const mru_general_info general_info = get_general_info<TILE_WIDTH>(state_width, sequence_length);
     
     dim3 scan_grid_dims(batch_size, scan_info.blocks_per_sequence, 1);
 
@@ -178,7 +183,7 @@ void mru_cuda_forward(
 
             
             mru_cuda_forward_scan_stage_kernel
-            <scalar_t, tile_width, tile_size>
+            <scalar_t, TILE_WIDTH, TILE_WIDTH * TILE_WIDTH>
             <<<scan_grid_dims, scan_info.threads_per_block, n_smem_elements * sizeof(scalar_t)>>>
             (
                 states.data_ptr<scalar_t>(),
