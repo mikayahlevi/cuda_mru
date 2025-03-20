@@ -54,12 +54,11 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
     // optimize offsets to not be recalculated?
     // first n_source_matrices * state_matrix_size elements are part of source_matrix_smem_cache
     // n_source_matrices long
-    scalar_t* const initial_states_source_matrices_smem_cache = smem_cache;
-    scalar_t* const states_grad_source_matrices_smem_cache = &smem_cache[n_source_matrices * state_matrix_size];
+    scalar_t* const source_matrices_smem_cache = smem_cache;
     // rest of the elements are part of inplace_matrices_smem_cache
     // n_inplace_matrices long
-    scalar_t* const initial_states_inplace_matrices_smem_cache = &smem_cache[2 * n_source_matrices * state_matrix_size];
-    scalar_t* const states_grad_inplace_matrices_smem_cache = &smem_cache[2 * n_source_matrices * state_matrix_size + n_inplace_matrices * state_matrix_size];
+    scalar_t* const initial_states_inplace_matrices_smem_cache = &smem_cache[n_source_matrices * state_matrix_size];
+    scalar_t* const states_grad_inplace_matrices_smem_cache = &smem_cache[n_source_matrices * state_matrix_size + n_inplace_matrices * state_matrix_size];
     
 
 
@@ -96,8 +95,10 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
     /* */ scalar_t* const states_grad_inplace_matrix_gmem_ptr = &states_grad[state_matrix_size * inplace_matrix_gmem_idx];
 
     // not const because it will be loaded in
-    scalar_t* const initial_states_source_matrix_smem_ptr = &initial_states_source_matrices_smem_cache[state_matrix_size * source_matrix_smem_idx];
-    scalar_t* const states_grad_source_matrix_smem_ptr = &states_grad_source_matrices_smem_cache[state_matrix_size * source_matrix_smem_idx];
+    // initial_states_source_matrix_smem_ptr and states_grad_source_matrix_smem_ptr can share the same location since they will not be loaded in concurrently
+    scalar_t* const initial_states_source_matrix_smem_ptr = &source_matrices_smem_cache[state_matrix_size * source_matrix_smem_idx];
+    scalar_t* const states_grad_source_matrix_smem_ptr    = &source_matrices_smem_cache[state_matrix_size * source_matrix_smem_idx];
+
     scalar_t* const initial_states_inplace_matrix_smem_ptr = &initial_states_inplace_matrices_smem_cache[state_matrix_size * inplace_matrix_smem_idx];
     scalar_t* const states_grad_inplace_matrix_smem_ptr = &states_grad_inplace_matrices_smem_cache[state_matrix_size * inplace_matrix_smem_idx];
 
@@ -118,9 +119,9 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
         const uint matmuls_per_source_matrix = min(matmuls_per_block, scan_stage_offset);
         const uint threads_per_source_matrix = threads_per_matmul * matmuls_per_source_matrix;
 
-        copy_two_matrices_transposed<scalar_t>(
-            initial_states_source_matrix_gmem_ptr, states_grad_source_matrix_gmem_ptr,
-            initial_states_source_matrix_smem_ptr, states_grad_source_matrix_smem_ptr,
+        copy_matrix_transposed<scalar_t>(
+            states_grad_source_matrix_gmem_ptr,
+            states_grad_source_matrix_smem_ptr,
 
             state_row_size,
             state_matrix_size,
@@ -172,6 +173,26 @@ __global__ void mru_cuda_backward_scan_stage_kernel(
 
     // reset result_tile to zeros
     for (uint i = 0; i < tile_size; ++i) result_tile[i] = 0.0;
+
+
+    // load the source matrices into smem
+    __syncthreads();
+    {
+        const uint matmuls_per_source_matrix = min(matmuls_per_block, scan_stage_offset);
+        const uint threads_per_source_matrix = threads_per_matmul * matmuls_per_source_matrix;
+
+        copy_matrix_transposed<scalar_t>(
+            initial_states_source_matrix_gmem_ptr,
+            initial_states_source_matrix_smem_ptr,
+
+            state_row_size,
+            state_matrix_size,
+
+            intra_matmul_thread_idx + threads_per_matmul * intra_block_input_group_subidx,
+            threads_per_source_matrix
+        );
+    }
+
 
     __syncthreads();
     matmul_matrices<scalar_t, tile_width>(result_tile,
@@ -304,7 +325,7 @@ void mru_cuda_backward(
         for (uint scan_stage = 0; scan_stage < scan_info.total_scan_stages; ++scan_stage) {
             const mru_stage_info stage_info = get_stage_info(scan_info, scan_stage);
 
-            const uint n_smem_elements = 2 * (stage_info.n_source_matrices + stage_info.n_inplace_matrices) * general_info.state_matrix_size; 
+            const uint n_smem_elements = (stage_info.n_source_matrices + 2 * stage_info.n_inplace_matrices) * general_info.state_matrix_size; 
             
 
             mru_cuda_backward_scan_stage_kernel
