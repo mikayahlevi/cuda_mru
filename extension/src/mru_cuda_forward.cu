@@ -42,71 +42,62 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
     // advance state pointer to the correct batch
     states += state_sequence_size * blockIdx.x;
 
-
+    // idk why it needs to be allocated as an unsigned char but otherwise it doesn't compile
     extern __shared__ __align__(sizeof(scalar_t)) unsigned char smem_cache_raw[];
     #define smem_cache reinterpret_cast<scalar_t*>(smem_cache_raw)
 
-    // first n_source_matrices * state_matrix_size elements are part of source_matrix_smem_cache
-    // n_source_matrices long
+    /*
+    the source matrices are the matrices on the left in the sklansky scan that are only read from
+    and are used in multiple matrix multiplications per stage
+    
+    the inplace matrices are the matrices on the right that the results of the matrix multiplications are written to
+    */
+    // split the shared memory into two parts for the source and inplace matrices
     scalar_t* const source_matrices_smem_cache = smem_cache;
-    // rest of the elements are part of inplace_matrices_smem_cache
-    // n_inplace_matrices long
     scalar_t* const inplace_matrices_smem_cache = &smem_cache[n_source_matrices * state_matrix_size];
     
 
+    // tiled_state_size is the same as the number of threads per matrix multiplication
+    // tile_idx is the thread index within the matrix multiplication
 
-    // tiled_state_size is the # threads per matmul
-
-    // threads working on the same matrix are consecutive
     const uint intra_block_matmul_idx = threadIdx.x / tiled_state_size;
     const uint matmul_idx = blockIdx.y * matmuls_per_block + intra_block_matmul_idx;
     const uint tile_idx = threadIdx.x % tiled_state_size;
 
-    // resolve indices
+    // resolve indices for a sklansky scan
 
-    const uint matmul_input_group = matmul_idx / scan_stage_offset;
-    const uint matmul_input_group_idx = scan_stage_offset + 2 * scan_stage_offset * matmul_input_group;
-    const uint matmul_input_group_subidx = matmul_idx % scan_stage_offset;
+    const uint sklansky_input_group = matmul_idx / scan_stage_offset;
+    const uint sklansky_input_group_idx = scan_stage_offset + 2 * scan_stage_offset * sklansky_input_group;
+    const uint sklansky_input_group_subidx = matmul_idx % scan_stage_offset;
 
+    const uint intra_block_sklansky_input_group_subidx = sklansky_input_group_subidx % matmuls_per_block;
 
     /*
-    global indices are different then shared indices because the shared
-    indices exclude matrices that are not loaded into the smem for the current block 
+    the indices for global and shared memory are different because the shared memory only stores the ones that
+    will be used for the current scan stage
     */
 
-    const uint source_matrix_gmem_idx = matmul_input_group_idx - 1;
-    const uint inplace_matrix_gmem_idx = matmul_input_group_idx + matmul_input_group_subidx;
-
+    const uint source_matrix_gmem_idx = sklansky_input_group_idx - 1;
+    const uint inplace_matrix_gmem_idx = sklansky_input_group_idx + sklansky_input_group_subidx;
 
     const uint source_matrix_smem_idx = intra_block_matmul_idx / scan_stage_offset;
     const uint inplace_matrix_smem_idx = intra_block_matmul_idx;
 
-
     // point to the correct memory locations
-    // threads to matrix location is a many-to-one function
-    const scalar_t* const source_matrix_gmem_ptr = &states[state_matrix_size * source_matrix_gmem_idx];
-    /* */ scalar_t* const inplace_matrix_gmem_ptr = &states[state_matrix_size * inplace_matrix_gmem_idx];
+    const scalar_t* const source_matrix_gmem_ptr = &states[source_matrix_gmem_idx * state_matrix_size];
+    /* */ scalar_t* const inplace_matrix_gmem_ptr = &states[inplace_matrix_gmem_idx * state_matrix_size];
 
-    // not const because it will be loaded in
-    scalar_t* const source_matrix_smem_ptr = &source_matrices_smem_cache[state_matrix_size * source_matrix_smem_idx];
-    scalar_t* const inplace_matrix_smem_ptr = &inplace_matrices_smem_cache[state_matrix_size * inplace_matrix_smem_idx];
+    scalar_t* const source_matrix_smem_ptr = &source_matrices_smem_cache[source_matrix_smem_idx * state_matrix_size];
+    scalar_t* const inplace_matrix_smem_ptr = &inplace_matrices_smem_cache[inplace_matrix_smem_idx * state_matrix_size];
 
 
 
-
-    // make the equations more intuitive for the gmem reads and writes
-    #define threads_per_matmul tiled_state_size
-    #define intra_matmul_thread_idx tile_idx
-
-
-    const uint intra_block_input_group_subidx = matmul_input_group_subidx % matmuls_per_block;
-
-
-    // load the source matrix into smem
+    // load the source matrices into smem
+    // threads from multiple matrix multiplications can load the same source matrix
     __syncthreads();
     {
         const uint matmuls_per_source_matrix = min(matmuls_per_block, scan_stage_offset);
-        const uint threads_per_source_matrix = threads_per_matmul * matmuls_per_source_matrix;
+        const uint threads_per_source_matrix = tiled_state_size * matmuls_per_source_matrix;
 
         copy_matrix_transposed<scalar_t>(
             source_matrix_gmem_ptr,
@@ -115,7 +106,7 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
             state_row_size,
             state_matrix_size,
             
-            intra_matmul_thread_idx + threads_per_matmul * intra_block_input_group_subidx,
+            tile_idx + tiled_state_size * intra_block_sklansky_input_group_subidx,
             threads_per_source_matrix
         );
     }
@@ -123,16 +114,22 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
 
     // load the inplace matrix into smem
     __syncthreads();
-    copy_matrix<scalar_t>(inplace_matrix_gmem_ptr, inplace_matrix_smem_ptr, state_matrix_size, intra_matmul_thread_idx, threads_per_matmul);
+    copy_matrix<scalar_t>(inplace_matrix_gmem_ptr, inplace_matrix_smem_ptr, state_matrix_size, tile_idx, tiled_state_size);
     
-    // compute the matmuls
+
+    // allocate a thread-specific tile for the result of the matrix multiplication
     scalar_t result_tile[tile_size] = {0.0};
     
-    // coords of the top left corner of the tile
+
+    // coords of the top left corner of the tile within the inplace matrix
     const uint tile_row = tile_width * (tile_idx / tiled_state_width);
     const uint tile_col = tile_width * (tile_idx % tiled_state_width);
 
-    const uint tile_depth_matmul_offset = state_row_size * (n_source_matrices * (tile_idx / 32) + intra_block_input_group_subidx);
+    /*
+    offset the start index for the the inner product of the matrix multiplication on a thread-wise basis so 
+    that threads won't access the same memory at the same time, avoiding bank conflicts
+    */
+    const uint tile_depth_matmul_offset = state_row_size * (n_source_matrices * (tile_idx / 32) + intra_block_sklansky_input_group_subidx);
 
     __syncthreads();
     matmul_matrices<scalar_t, tile_width>(
@@ -148,16 +145,16 @@ __global__ void mru_cuda_forward_scan_stage_kernel(
         state_row_size
     );
 
+    // write back to the inplace matrix, which will be used as a buffer before writing back to global memory
     __syncthreads();
     write_tile<scalar_t, tile_width, false>(result_tile, inplace_matrix_smem_ptr, tile_col, tile_row, state_row_size);
 
 
-    // write results from smem back to gmem
+    // write results from shared memory back to global memory
     __syncthreads();
-    copy_matrix<scalar_t>(inplace_matrix_smem_ptr, inplace_matrix_gmem_ptr, state_matrix_size, intra_matmul_thread_idx, threads_per_matmul);
+    copy_matrix<scalar_t>(inplace_matrix_smem_ptr, inplace_matrix_gmem_ptr, state_matrix_size, tile_idx, tiled_state_size);
 
-    #undef threads_per_matmul
-    #undef intra_matmul_thread_idx
+    #undef smem_cache
 }
 
 
