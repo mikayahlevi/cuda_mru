@@ -16,4 +16,4 @@ Furthermore, I don't have a NVIDIA GPU, so the code probably lacks a lot of opti
 ## Performance
 Despite all of the drawbacks, the CUDA implementation still significantly outperforms both the Brent-Kung and Hillis-Steele scans implemented naively implemented in PyTorch.
 Below is a graph shows the speedup over the naive code when running on an A100 GPU. Hidden size is the product of the size of the last two dimensions, giving the size of each matrix.
-![Relative Performance](mru-lm_vs_transformer.png)
+![Relative Performance](relative_cuda_performance.png)
