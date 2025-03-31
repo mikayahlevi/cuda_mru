@@ -1,6 +1,6 @@
 # cuda-mru
 ## Description
-A PyTorch extension for the [MRU operator](https://github.com/mikayahlevi/mru-lm) implemented in CUDA. It uses the Sklansky scan to effeciently compute many of the matrix multiplications in parallel over multiple scans.
+A PyTorch extension for the [MRU operator](https://github.com/mikayahlevi/mru-lm) implemented in CUDA. It uses the Sklansky scan to efficiently compute many of the matrix multiplications in parallel over multiple scans.
 Currently, the code is still a work in progress so it has a few flaws.
 
 ## Drawbacks
